@@ -14,17 +14,17 @@ tello.connect()
 print(f"Battery: {tello.get_battery()}")
 
 tello.streamon()
-time.sleep(1)
+time.sleep(2)
 tello.takeoff()
 for i in range(5):
-    tello.send_rc_control(0, 0, 25, 0)
+    tello.send_rc_control(0, 5, 25, 0)
 
 # calibrated feature size area, ideally gets replaced by something like monodepth
 feature_sizes = {
     "shirt": [24000, 25000], # min 18000
     "chair": [24000, 25000], # min 18000
     "face": [14000, 15000],
-    "person": [14000, 15000],
+    "person": [50000, 55000],
 }
 
 def findFace(img):
@@ -113,10 +113,10 @@ def trackFace(info, pid, px_error, py_error, fbRange):
         if sum([1 for x, y in target_coord_queue if x == 0 and y == 0]) > 17:
             tello.send_rc_control(0, 0, 0, turn_dir * 10)
         else:
-            tello.send_rc_control(0, 0, 0, 0)
+            tello.send_rc_control(0, 5, 0, 0)
     else:
         # otherwise, send RC control to follow target
-        tello.send_rc_control(0, fb, y_speed, x_speed)
+        tello.send_rc_control(0, fb + 5, y_speed, x_speed)
 
     x_error_queue.append(x_error)
     y_error_queue.append(y_error)
@@ -135,7 +135,7 @@ def main():
         img = tello.get_frame_read().frame
         # img, info, obj = findShirt(img) # TODO: swap out with YOLO
         # img = cv2.resize(img, (480, 360))
-        print(target_coord_queue)
+        # print(target_coord_queue)
         img, info, obj = findBoundingBox(img, labels=["a chair"])
         obj = "chair"
         fbRange = feature_sizes[obj]
