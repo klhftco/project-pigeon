@@ -16,12 +16,15 @@ time.sleep(3)
 
 def findFace(img):
     '''
+    input:
+        img - RGB image as an np.array
     output:
         img - image overlay of tracking target
         info[0] - (x, y) coordinate of center of target in frame
         info[1] - area of target in frame
     '''
     # return the image with bounding box around the face & the center of the face
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
     faceCascade = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
     imgGray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     faces = faceCascade.detectMultiScale(imgGray, 1.2, 8)
@@ -30,7 +33,7 @@ def findFace(img):
     myFaceListArea = []
     for x, y, w, h in faces:
         # draw bounding box around the face
-        cv2.rectangle(img, (x, y), (x + w, y + h), (0, 0, 255), 2)
+        cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 255), 2)
         cx = x + w // 2
         cy = y + h // 2
         area = w * h

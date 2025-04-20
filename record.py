@@ -2,7 +2,17 @@ import time
 import cv2
 from djitellopy import Tello, TelloException
 import keyboard
+import subprocess
+import os
 
+def fix_fps(filename, filename_fixed, fps):
+    subprocess.run([
+        'ffmpeg', '-y', '-i', filename,
+        '-r', str(fps),
+        '-c:v', 'copy',
+        filename_fixed
+    ])
+    os.remove(filename)
 
 def main(fly=False):
     tello = Tello()
@@ -20,43 +30,50 @@ def main(fly=False):
 
         # Use a codec known to work well on Windows
         fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-        out = cv2.VideoWriter('drone_output.avi', fourcc, 80.0, (width, height))
+        out = cv2.VideoWriter('drone_output.avi', fourcc, 34.0, (width, height))
         time.sleep(1)
 
+        frame_count = 0
         start_time = time.time()
         print("Recording started...")
 
         vel = 20
         while True:
             img = frame_read.frame
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
             img = cv2.resize(img, (width, height))
             out.write(img)
             cv2.imshow("Drone View", img)
             cv2.waitKey(10)
+            frame_count += 1
 
             if fly:
                 if keyboard.is_pressed('w'):
-                    vx = vel * 2
-                    wz = 0
+                    vx = vel * 3
                 elif keyboard.is_pressed('s'):
-                    vx = -vel * 3
-                    wz = 0
-                elif keyboard.is_pressed('a'):
-                    vx = 0
-                    wz = -vel * 3
-                elif keyboard.is_pressed('d'):
-                    vx = 0
-                    wz = vel * 3
+                    vx = -vel * 4
                 else:
                     vx = 0
+                if keyboard.is_pressed('r'):
+                    vz = vel
+                elif keyboard.is_pressed('f'):
+                    vz = -vel
+                else:
+                    vz = 0
+                if keyboard.is_pressed('a'):
+                    wz = -vel * 3
+                elif keyboard.is_pressed('d'):
+                    wz = vel * 3
+                else:
                     wz = 0
-                tello.send_rc_control(0, vx, 0, wz)
+                tello.send_rc_control(0, vx, vz, wz)
 
             if keyboard.is_pressed('q'):
                 print("finishing")
                 break
     finally:
-        print("Recording duration:", round(time.time() - start_time, 2), "seconds")
+        duration = round(time.time() - start_time, 2)
+        print("Recording duration:", duration, "seconds")
         cv2.destroyAllWindows()
         out.release()
 
@@ -68,5 +85,9 @@ def main(fly=False):
         tello.streamoff()
         tello.end()
 
+        true_fps = frame_count / duration
+        print(f"Fixing video playback to {true_fps:.2f} FPS...")
+        fix_fps('drone_output.avi', 'video/drone.avi', true_fps)
+
 if __name__ == "__main__":
-    main(fly=False)
+    main(fly=True)
