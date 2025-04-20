@@ -83,6 +83,11 @@ def findPerson(img, model):
     else:
         return img, [[0, 0], 0], []
 
+# initialize center coord, error queues
+x_error_queue = deque(maxlen=100)
+y_error_queue = deque(maxlen=100)
+face_coord_queue = deque(maxlen=20)
+
 def trackFace(info, pid, px_error, py_error, fbRange=[14000, 15000]):
     (x, y), area = info
     w, h = 960, 720
@@ -124,7 +129,7 @@ def trackFace(info, pid, px_error, py_error, fbRange=[14000, 15000]):
     # if no target detected, rotate in place to search
     if x == 0 or y == 0:
         turn_dir = -1 if x < w // 2 else 1
-        if sum([1 for x, y in center_coords_queue if x == 0 and y == 0]) > 15:
+        if sum([1 for x, y in face_coord_queue if x == 0 and y == 0]) > 15:
             tello.send_rc_control(0, 0, 0, turn_dir * 40)
         else:
             tello.send_rc_control(0, 0, 0, 0)
