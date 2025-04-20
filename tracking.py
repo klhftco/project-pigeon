@@ -10,9 +10,17 @@ tello.connect()
 print(tello.get_battery())
 
 tello.streamon()
+time.sleep(1)
 tello.takeoff()
-tello.send_rc_control(0, 0, 25, 0)
-time.sleep(3)
+for i in range(20):
+    tello.send_rc_control(0, 0, 25, 0)
+
+# calibrated feature size area
+feature_sizes = {
+    "shirt": [24000, 25000], # min 18000
+    "face": [14000, 15000],
+    "person": [14000, 15000],
+}
 
 def findFace(img):
     '''
@@ -52,7 +60,7 @@ x_error_queue = deque(maxlen=100)
 y_error_queue = deque(maxlen=100)
 face_coord_queue = deque(maxlen=20)
 
-def trackFace(info, pid, px_error, py_error, fbRange=[14000, 15000]):
+def trackFace(info, pid, px_error, py_error, fbRange):
     (x, y), area = info
     w, h = 960, 720
     face_coord_queue.append((x, y))
@@ -116,8 +124,9 @@ def main():
 
     while True:
         img = tello.get_frame_read().frame
-        img, info = findFace(img) # TODO: swap out with YOLO
-        px_error, py_error = trackFace(info, pid, px_error, py_error)
+        img, info, obj = findShirt(img) # TODO: swap out with YOLO
+        fbRange = feature_sizes[obj]
+        px_error, py_error = trackFace(info, pid, px_error, py_error, fbRange)
         cv2.imshow("Output", img)
 
         if cv2.waitKey(1) & 0xFF == ord("q"):

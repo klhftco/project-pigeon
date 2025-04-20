@@ -14,7 +14,7 @@ def fix_fps(filename, filename_fixed, fps):
     ])
     os.remove(filename)
 
-def main(fly=False):
+def main(fly=False, record=False):
     tello = Tello()
 
     try:
@@ -30,7 +30,7 @@ def main(fly=False):
 
         # Use a codec known to work well on Windows
         fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-        out = cv2.VideoWriter('drone_output.avi', fourcc, 34.0, (width, height))
+        out = cv2.VideoWriter('drone_output.avi', fourcc, 30.0, (width, height))
         time.sleep(1)
 
         frame_count = 0
@@ -66,7 +66,16 @@ def main(fly=False):
                     wz = vel * 3
                 else:
                     wz = 0
-                tello.send_rc_control(0, vx, vz, wz)
+
+                kp = 0.5
+                curr_vx = tello.get_speed_x()
+                curr_vy = tello.get_speed_y()
+                curr_vz = tello.get_speed_z()
+                vx = int(vx + kp * (curr_vx - vx))
+                vy = int(0 + kp * (curr_vy - 0))
+                vz = int(vz + kp * (curr_vz - vz))
+                print(curr_vx, curr_vy, curr_vz)
+                tello.send_rc_control(vy, vx, vz, wz)
 
             if keyboard.is_pressed('q'):
                 print("finishing")
@@ -85,9 +94,10 @@ def main(fly=False):
         tello.streamoff()
         tello.end()
 
-        true_fps = frame_count / duration
-        print(f"Fixing video playback to {true_fps:.2f} FPS...")
-        fix_fps('drone_output.avi', 'video/drone.avi', true_fps)
+        if record:
+            true_fps = frame_count / duration
+            print(f"Fixing video playback to {true_fps:.2f} FPS...")
+            fix_fps('drone_output.avi', 'video/drone.avi', true_fps)
 
 if __name__ == "__main__":
-    main(fly=True)
+    main(fly=True, record=False)
