@@ -585,6 +585,9 @@ class DroneFaceTrackerOwl:
                         try:
                             self.tello.takeoff()
                             self.is_flying = True
+                            time.sleep(1)
+                            print("raising altitude...")
+                            self.tello.move_up(70)
                         except Exception as e:
                             print(f"❌ Takeoff failed: {e}")
                     else:
