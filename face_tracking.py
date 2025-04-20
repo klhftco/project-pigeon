@@ -125,77 +125,6 @@ def trackFace(info, w, pid, px_error, py_error):
     print(f"fb={fb} x_speed={x_speed} y_speed={y_speed}")
     return x_error, y_error
 
-def circle_motion(drone, speed, yaw_speed, duration):
-    # record a panoramic video by moving the drone in a circular motion
-    print(f"Starting circular motion with speed={speed} cm/s, yaw_speed={yaw_speed} deg/s, and duration={duration} seconds")
-
-    start_time = time.time()
-
-    height, width, _ = drone.get_frame_read().frame.shape
-    video = cv2.VideoWriter(f'circle_motion_video_{start_time}.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 30, (width, height))
-    print("Video recording started.")
-
-    try:
-        while time.time() - start_time < duration:
-            frame = drone.get_frame_read().frame
-            cv2.imshow("Output", frame)
-
-            if frame is not None:
-                video.write(frame)
-            time.sleep(1 / 50)
-
-            # Check if "q" is pressed to stop
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                print("[DEBUG] 'q' pressed, stopping and landing...")
-                break
-
-            # Send RC control commands: move forward and yaw
-            drone.send_rc_control(speed, 0, 0, yaw_speed)
-            time.sleep(0.05)  # Maintain smooth control by sending commands frequently
-
-    except Exception as e:
-        print(f"[ERROR] An error occurred during circular motion: {e}")
-
-    finally:
-        # Stop the motion
-        print("[DEBUG] Stopping drone...")
-        drone.send_rc_control(0, 0, 0, 0)
-        time.sleep(0.1)
-        video.release()
-        print("Video recording stopped and saved as 'circle_motion_video.mp4'.")
-        
-    # # Example usage of circle_motion in main:
-    # circle_motion(me, speed=-30, yaw_speed=-35, duration=24)  # Adjust speed, yaw speed, and duration as needed
-
-def take_picture(img):
-    #Save a picture from the current frame + bounding box.
-    cv2.imwrite(f"picture_{time.time()}.png", img)
-    print("Picture taken!")
-
-def read_sensor_and_perform_action(img):
-    # time.sleep(2)
-    # print("command sent!!!!")
-    # execute_command(1, img)
-    with open("cache.pkl", "rb") as file:
-        allSnaps = pickle.load(file)
-    global INDEX
-    if len(allSnaps)>INDEX:
-        print("current command:", allSnaps[INDEX])
-        Command = allSnaps[INDEX]
-        INDEX +=1
-        execute_command(Command, img)
-
-def execute_command(command, img):
-    print("executing command:", command)
-    if command == 1:
-        print("Yield to circle motion")
-        circle_motion(me, speed=-15, yaw_speed=35, duration=20)
-        print("Circle motion done")
-    elif command == 2:
-        take_picture(img)
-    else:
-        pass
-
 px_error = 0
 py_error = 0
 
@@ -204,7 +133,6 @@ while True:
     img = tello.get_frame_read().frame
     img, info = findFace(img)
     px_error, py_error = trackFace(info, w, pid, px_error, py_error)
-    read_sensor_and_perform_action(img)
     cv2.imshow("Output", img)
 
     if cv2.waitKey(1) & 0xFF == ord("q"):
