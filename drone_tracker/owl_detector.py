@@ -64,11 +64,11 @@ class OwlDetector:
         self.target_texts = [
             # "a person wearing a hat",
             # "a hat",
-            # "a baseball cap", 
-            # "a person wearing a baseball cap", 
+            # "a baseball cap",
+            # "a person wearing a baseball cap",
             # "a man wearing a hat",
             # "a woman wearing a hat",
-            "a person wearing blue", 
+            "a person wearing blue",
             "a person wearing a blue shirt",
             "a person wearing a blue t-shirt"
         ]
@@ -76,10 +76,10 @@ class OwlDetector:
     def _enhance_colors(self, bgr_frame):
         """
         Enhance colors in the frame to improve detection of colored objects.
-        
+
         Args:
             bgr_frame (np.ndarray): BGR format frame from OpenCV
-            
+
         Returns:
             np.ndarray: Enhanced BGR frame
         """
@@ -89,15 +89,15 @@ class OwlDetector:
                 bgr_frame = cv2.xphoto.createGrayworldWB().balanceWhite(bgr_frame)
             else:
                 print("⚠️ cv2.xphoto not available - skipping white balance")
-                
+
             # Light denoise (ISO speckle kills color info)
             bgr_frame = cv2.fastNlMeansDenoisingColored(bgr_frame, None, 10, 10, 7, 21)
-            
+
             # Slight gamma lift for better color visibility
             bgr_frame = cv2.convertScaleAbs(bgr_frame, alpha=1.3, beta=0)
-            
+
             return bgr_frame
-            
+
         except Exception as e:
             print(f"⚠️ Color enhancement failed: {e}, using original frame")
             return bgr_frame
@@ -120,10 +120,10 @@ class OwlDetector:
         # Use provided target_texts if specified, otherwise use default
         if target_texts is None:
             target_texts = self.target_texts
-            
+
         # 0. Enhance colors to improve detection
         enhanced_frame = self._enhance_colors(frame.copy())
-        
+
         # 1. Preprocess: Convert OpenCV BGR frame to PIL RGB Image
         image = Image.fromarray(cv2.cvtColor(enhanced_frame, cv2.COLOR_BGR2RGB))
 
@@ -147,11 +147,11 @@ class OwlDetector:
 
         # 3. Inference
         outputs = self.model(**inputs)
-        
+
         # DEBUGGING: Print top confidence scores for each prompt
         logits = outputs.logits  # [B, num_queries, #prompts]
         probs = logits.sigmoid()[0].cpu().numpy()  # (num_queries, #prompts)
-        
+
         print("top 5 scores for each prompt:")
         for p_idx, prompt in enumerate(target_texts):
             top = sorted(probs[:, p_idx], reverse=True)[:5]
@@ -238,4 +238,4 @@ if __name__ == '__main__':
 
     cap.release()
     cv2.destroyAllWindows()
-    print("✅ OwlDetector test finished.") 
+    print("✅ OwlDetector test finished.")

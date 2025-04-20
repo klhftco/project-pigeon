@@ -8,14 +8,14 @@ import logging # Added for logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Import the new classes
-from .yolo_detector import YoloDetector 
+from .yolo_detector import YoloDetector
 from .tracker import SimpleTracker
 
 class DroneController:
     """Manages drone connection, control, and integrates tracking."""
 
-    def __init__(self, 
-                 yolo_model_path="yolov8n.pt", 
+    def __init__(self,
+                 yolo_model_path="yolov8n.pt",
                  conf_threshold=0.30,
                  iou_threshold=0.3,
                  max_track_age=5,
@@ -24,17 +24,20 @@ class DroneController:
                  max_yaw_speed=20,
                  kp_yaw=0.8,             # Proportional control gain for yaw
                  battery_check_interval=5, # Seconds between battery checks
-                 command_interval=0.2): # Minimum seconds between sending commands
+                 command_interval=0.2,
+                 tello=None): # Minimum seconds between sending commands
         """
         Initializes the drone controller, detector, and tracker.
         """
         logging.info("Initializing DroneController...")
-        self.tello = Tello()
+        self.tello = tello
+        if not tello:
+            self.tello = Tello()
         self.detector = YoloDetector(model_path=yolo_model_path)
-        self.tracker = SimpleTracker(iou_threshold=iou_threshold, 
-                                     max_age=max_track_age, 
+        self.tracker = SimpleTracker(iou_threshold=iou_threshold,
+                                     max_age=max_track_age,
                                      min_hits=min_track_hits)
-        
+
         self.conf_threshold = conf_threshold
         self.horizontal_threshold = horizontal_threshold
         self.max_yaw_speed = max_yaw_speed
@@ -72,18 +75,18 @@ class DroneController:
             self.tello.streamon()
             self.frame_reader = self.tello.get_frame_read()
             # Allow time for stream to stabilize
-            time.sleep(2) 
+            time.sleep(2)
             logging.info("✅ Video stream started.")
 
             # Create window and set mouse callback *after* stream starts
             # Ensures frame dimensions are available if needed by callback initially
             cv2.namedWindow(self.window_name)
             # Pass the tracker's method as the callback
-            cv2.setMouseCallback(self.window_name, self.tracker.handle_mouse_click) 
+            cv2.setMouseCallback(self.window_name, self.tracker.handle_mouse_click)
             logging.info("✅ OpenCV window created and mouse callback set.")
             self._setup_complete = True
             return True
-            
+
         except Exception as e:
             logging.error(f"❌ Error during drone connection or setup: {e}", exc_info=True)
             logging.warning("   Check drone connection, power, and network.")
@@ -92,6 +95,44 @@ class DroneController:
                 self.tello.streamoff()
             except Exception:
                 pass # Ignore errors during cleanup
+            cv2.destroyAllWindows()
+            return False
+
+    def connect_to_drone(self):
+        """Connects to the Tello drone and retrieves battery info."""
+        try:
+            logging.info("Connecting to Tello drone...")
+            self.tello.connect()
+            self.battery_level = self.tello.get_battery()
+            self.last_battery_check_time = time.time()
+            logging.info(f"✅ Drone connected. Battery: {self.battery_level}%")
+            return True
+        except Exception as e:
+            logging.error(f"❌ Error connecting to drone: {e}", exc_info=True)
+            return False
+
+    def setup_video_and_ui(self):
+        """Starts video stream and sets up OpenCV window and UI callbacks."""
+        try:
+            logging.info("Starting video stream...")
+            self.tello.streamon()
+            self.frame_reader = self.tello.get_frame_read()
+            time.sleep(2)
+            logging.info("✅ Video stream started.")
+
+            # Create window and set mouse callback
+            cv2.namedWindow(self.window_name)
+            cv2.setMouseCallback(self.window_name, self.tracker.handle_mouse_click)
+            logging.info("✅ OpenCV window created and mouse callback set.")
+            self._setup_complete = True
+            return True
+        except Exception as e:
+            logging.error(f"❌ Error during video/UI setup: {e}", exc_info=True)
+            logging.warning("Check if video stream is already running or UI is blocked.")
+            try:
+                self.tello.streamoff()
+            except Exception:
+                pass
             cv2.destroyAllWindows()
             return False
 
@@ -115,10 +156,10 @@ class DroneController:
 
             # Calculate yaw speed using proportional control
             yaw_speed = int(self.kp_yaw * error)
-            
+
             # Clip to maximum speed
             yaw_speed = min(yaw_speed, self.max_yaw_speed)
-            
+
             # Set direction (negative = left, positive = right)
             if target_relative_pos_percent < 0:
                 yaw_speed = -yaw_speed
@@ -127,7 +168,7 @@ class DroneController:
                 # print(f"Turning RIGHT with speed {yaw_speed}") # Optional debug print
         # else:
             # print("Target centered - no turning needed") # Optional debug print
-        
+
         return yaw_speed
 
     def _draw_overlay(self, frame, confirmed_tracks, target_relative_pos):
@@ -167,27 +208,27 @@ class DroneController:
         center_x = width // 2
         threshold_px = int(center_x * (self.horizontal_threshold / 100.0))
         cv2.line(frame, (center_x, 0), (center_x, height), (0, 0, 255), 1) # Center line (Red)
-        cv2.line(frame, (center_x - threshold_px, 0), 
+        cv2.line(frame, (center_x - threshold_px, 0),
                  (center_x - threshold_px, height), (255, 0, 0), 1) # Left Threshold (Blue)
-        cv2.line(frame, (center_x + threshold_px, 0), 
+        cv2.line(frame, (center_x + threshold_px, 0),
                  (center_x + threshold_px, height), (255, 0, 0), 1) # Right Threshold (Blue)
 
         # Display Target Info
         if target_relative_pos is not None:
-             cv2.putText(frame, f"Target Offset: {target_relative_pos:.1f}%", (10, 60), 
+             cv2.putText(frame, f"Target Offset: {target_relative_pos:.1f}%", (10, 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         elif self.tracker.target_track_id is not None:
             # Target ID exists but maybe lost this frame
-            cv2.putText(frame, f"Target ID {self.tracker.target_track_id} LOST", (10, 60), 
+            cv2.putText(frame, f"Target ID {self.tracker.target_track_id} LOST", (10, 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2) # Orange
         else:
-             cv2.putText(frame, "No target selected", (10, 60), 
+             cv2.putText(frame, "No target selected", (10, 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
         # Display FPS
-        cv2.putText(frame, f"FPS: {self.display_fps:.2f}", (10, 30), 
+        cv2.putText(frame, f"FPS: {self.display_fps:.2f}", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
+
         # Display Battery Level
         batt_text = f"Battery: {self.battery_level}%" if self.battery_level is not None else "Battery: N/A"
         batt_color = (0, 255, 0) # Green default
@@ -212,18 +253,21 @@ class DroneController:
         # Display Drone Status
         status_text = "Status: FLYING" if self.is_flying else "Status: LANDED"
         status_color = (0, 255, 0) if self.is_flying else (0, 0, 255)
-        cv2.putText(frame, status_text, (10, height - 20), 
+        cv2.putText(frame, status_text, (10, height - 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
 
 
-    def run(self):
+    def run(self, connected=False):
         """Runs the main control loop."""
-        if not self._connect_and_setup():
-            logging.error("❌ Failed to initialize drone connection. Exiting.")
-            return # Exit if setup failed
+        if not connected:
+            if not self._connect_and_setup():
+                logging.error("❌ Failed to initialize drone connection. Exiting.")
+                return # Exit if setup failed
+        else:
+            self.setup_video_and_ui()
 
         update_interval = 0.05 # Target 20 FPS processing loop (adjust as needed)
-        
+
         logging.info("Starting main control loop. Press SPACE to takeoff/land, Q to quit.")
 
         try:
@@ -238,13 +282,13 @@ class DroneController:
                         if new_battery_level != self.battery_level:
                              # logging.debug(f"Battery updated: {new_battery_level}%") # Optional debug
                              self.battery_level = new_battery_level
-                        
+
                         # Update Flight Status based on drone report
                         actual_is_flying = self.tello.is_flying
                         if actual_is_flying != self.is_flying:
                              logging.info(f"Drone reported flight status change: {'Flying' if actual_is_flying else 'Landed'}. Updating state.")
                              self.is_flying = actual_is_flying # Correct the state based on drone report
-                        
+
                         self.last_battery_check_time = current_time
 
                     except Exception as e:
@@ -372,18 +416,18 @@ class DroneController:
                     self.tello.land()
                 except Exception as land_err:
                     logging.error(f"Emergency land failed: {land_err}")
-            
+
             # Turn off stream and RC control regardless of flight status
             logging.info("Turning off RC control and video stream...")
             try:
                  # Send zero movement command one last time
-                 self.tello.send_rc_control(0,0,0,0) 
+                 self.tello.send_rc_control(0,0,0,0)
                  time.sleep(0.1)
-                 if self.tello.is_stream_on: 
+                 if self.tello.is_stream_on:
                       self.tello.streamoff()
             except Exception as clean_err:
                  logging.warning(f"⚠️ Error during stream/RC off: {clean_err}")
-            
+
             # Explicitly end connection
             try:
                  self.tello.end()
@@ -396,7 +440,7 @@ class DroneController:
 
 # Main execution block
 if __name__ == '__main__':
-    # To run this directly, ensure you are in the parent directory 
+    # To run this directly, ensure you are in the parent directory
     # (e.g., local_owl) and run using: python -m drone_tracker.drone_controller
     controller = DroneController(
         yolo_model_path="yolov8n.pt", # Make sure this path is correct
@@ -410,4 +454,4 @@ if __name__ == '__main__':
         battery_check_interval=5, # Check battery every 5 seconds
         command_interval=0.2 # Send commands max every 200ms
     )
-    controller.run() 
+    controller.run()
