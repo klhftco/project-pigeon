@@ -8,33 +8,47 @@ from ultralytics import YOLO
 
 tello = Tello()
 tello.connect()
-print(tello.get_battery())
+battery = tello.get_battery()
+print(f"Tello battery: {battery}%")
 
+# Check battery level but only warn
+if battery < 20:
+    print("WARNING: Battery level is low! Consider charging the drone.")
+
+# Wait for drone to stabilize
+print("Waiting for drone to stabilize...")
+time.sleep(5)
+
+# Start video stream
+print("Starting video stream...")
 tello.streamon()
-tello.takeoff()
+time.sleep(2)  # Give time for stream to initialize
+
+# Try to take off with retries
+max_retries = 3
+for attempt in range(max_retries):
+    try:
+        print(f"Takeoff attempt {attempt + 1}...")
+        tello.takeoff()
+        print("Takeoff successful!")
+        break
+    except Exception as e:
+        print(f"Takeoff attempt {attempt + 1} failed: {str(e)}")
+        if attempt == max_retries - 1:
+            print("All takeoff attempts failed. Please check the drone and try again.")
+            tello.streamoff()
+            exit()
+        time.sleep(2)  # Wait before retrying
+
+# Initial height adjustment
 tello.send_rc_control(0, 0, 25, 0)
 time.sleep(3)
 
-# Global variables for person selection
-selected_person = None
-selecting = False
-
-def mouse_callback(event, x, y, flags, param):
-    global selected_person, selecting
-    if event == cv2.EVENT_LBUTTONDOWN:
-        selecting = True
-        # Find the person closest to the click point
-        min_dist = float('inf')
-        for i, (box, center) in enumerate(param['detections']):
-            cx, cy = center
-            dist = np.sqrt((x - cx)**2 + (y - cy)**2)
-            if dist < min_dist:
-                min_dist = dist
-                selected_person = i
-        selecting = False
-
 def findPerson(img, model):
     '''
+    input:
+        img - RGB image as an np.array
+        model - YOLOv8 model
     output:
         img - image overlay of tracking target
         info[0] - (x, y) coordinate of center of target in frame
@@ -49,51 +63,47 @@ def findPerson(img, model):
     
     myPersonListC = []
     myPersonListArea = []
-    detections = []  # Store all detections for selection
     
     # Process each detected person
     for box in boxes:
         x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
         x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
         
+        # Draw bounding box
+        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+        
         # Calculate center and area
         cx = (x1 + x2) // 2
         cy = (y1 + y2) // 2
         area = (x2 - x1) * (y2 - y1)
         
-        # Store detection info
-        detections.append((box, [cx, cy]))
-        
-        # Draw bounding box
-        color = (0, 255, 0) if len(detections)-1 == selected_person else (0, 0, 255)
-        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+        # Display confidence score
+        conf = box.conf[0].item()
+        cv2.putText(img, f'Conf: {conf:.2f}', (x1, y1 - 10), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         
         cv2.circle(img, (cx, cy), 5, (0, 255, 0), cv2.FILLED)
         myPersonListC.append([cx, cy])
         myPersonListArea.append(area)
     
     if len(myPersonListArea) != 0:
-        if selected_person is not None and selected_person < len(myPersonListArea):
-            # Return the selected person
-            return img, [myPersonListC[selected_person], myPersonListArea[selected_person]], detections
-        else:
-            # Return the person with the largest area
-            i = myPersonListArea.index(max(myPersonListArea))
-            return img, [myPersonListC[i], myPersonListArea[i]], detections
+        # Return the person with the largest area
+        i = myPersonListArea.index(max(myPersonListArea))
+        return img, [myPersonListC[i], myPersonListArea[i]]
     else:
-        return img, [[0, 0], 0], []
+        return img, [[0, 0], 0]
 
 # initialize center coord, error queues
 x_error_queue = deque(maxlen=100)
 y_error_queue = deque(maxlen=100)
-face_coord_queue = deque(maxlen=20)
+person_coord_queue = deque(maxlen=20)
 
-def trackFace(info, pid, px_error, py_error, fbRange=[14000, 15000]):
+def trackPerson(info, pid, px_error, py_error, fbRange=[14000, 15000]):
     (x, y), area = info
     w, h = 960, 720
-    face_coord_queue.append((x, y))
+    person_coord_queue.append((x, y))
 
-    # reset errors if no face is detected
+    # reset errors if no person is detected
     if x == 0 or y == 0:
         x_error = 0
         y_error = 0
@@ -129,7 +139,7 @@ def trackFace(info, pid, px_error, py_error, fbRange=[14000, 15000]):
     # if no target detected, rotate in place to search
     if x == 0 or y == 0:
         turn_dir = -1 if x < w // 2 else 1
-        if sum([1 for x, y in face_coord_queue if x == 0 and y == 0]) > 15:
+        if sum([1 for x, y in person_coord_queue if x == 0 and y == 0]) > 15:
             tello.send_rc_control(0, 0, 0, turn_dir * 40)
         else:
             tello.send_rc_control(0, 0, 0, 0)
@@ -145,40 +155,32 @@ def trackFace(info, pid, px_error, py_error, fbRange=[14000, 15000]):
     return x_error, y_error
 
 def main():
-    # initialize center coord, error queues
-    x_error_queue = deque(maxlen=100)
-    y_error_queue = deque(maxlen=100)
-    face_coord_queue = deque(maxlen=20)
-
     # Load YOLOv8 model
-    print("Loading YOLOv8 model...")
     model = YOLO('yolov8n.pt')
-    print("Model loaded successfully!")
-
-    # Create window and set mouse callback
-    cv2.namedWindow("Output")
-    cv2.setMouseCallback("Output", mouse_callback, {'detections': []})
-
+    
     # pid parameters
     pid = [0.2, 0.04, 0.005]
     px_error = 0
     py_error = 0
 
-    print("Click on a person to select them for tracking. Press 'q' to quit.")
+    try:
+        while True:
+            img = tello.get_frame_read().frame
+            img, info = findPerson(img, model)
+            px_error, py_error = trackPerson(info, pid, px_error, py_error)
+            cv2.imshow("Output", img)
 
-    while True:
-        img = tello.get_frame_read().frame
-        img, info, detections = findPerson(img, model)
-        
-        # Update detections for mouse callback
-        cv2.setMouseCallback("Output", mouse_callback, {'detections': detections})
-        
-        px_error, py_error = trackFace(info, pid, px_error, py_error)
-        cv2.imshow("Output", img)
-
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            tello.land()
-            break
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                tello.land()
+                break
+    except KeyboardInterrupt:
+        print("\nStopping...")
+    finally:
+        # Clean up
+        print("Landing...")
+        tello.land()
+        tello.streamoff()
+        cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     main()
