@@ -1,0 +1,179 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drone Control </title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f5f5f5;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .chat-container {
+            max-width: 800px;
+            margin: 30px auto;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+        }
+        .chat-header {
+            background-color: #007bff;
+            color: white;
+            padding: 15px;
+            text-align: center;
+        }
+        .chat-messages {
+            height: 400px;
+            overflow-y: auto;
+            padding: 15px;
+            background-color: white;
+        }
+        .message {
+            margin-bottom: 15px;
+            padding: 10px 15px;
+            border-radius: 5px;
+            max-width: 80%;
+        }
+        .user-message {
+            background-color: #e6f2ff;
+            margin-left: auto;
+            border: 1px solid #b3d9ff;
+        }
+        .assistant-message {
+            background-color: #f0f0f0;
+            margin-right: auto;
+            border: 1px solid #e0e0e0;
+        }
+        .action-message {
+            background-color: #fff3cd;
+            margin-right: auto;
+            border: 1px solid #ffecb5;
+            font-family: monospace;
+        }
+        .input-group {
+            padding: 15px;
+            background-color: #f8f9fa;
+        }
+        .drone-icon {
+            font-size: 24px;
+            margin-right: 10px;
+        }
+        .drone-image {
+            max-width: 100%;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin-top: 10px;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="chat-container">
+            <div class="chat-header">
+                <h2><span class="drone-icon">🚁</span> Drone Control</h2>
+            </div>
+            <div class="chat-messages" id="chat-messages">
+                <div class="message assistant-message">
+                   Commands: "Find the person in a yellow hat", "Move closer to the target", "Spin around target", "Show me the camera view"               
+                </div>
+            </div>
+            <div class="input-group">
+                <input type="text" id="user-input" class="form-control" placeholder="Type your command here...">
+                <button class="btn btn-primary" id="send-button">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const chatMessages = document.getElementById('chat-messages');
+            const userInput = document.getElementById('user-input');
+            const sendButton = document.getElementById('send-button');
+
+            function appendMessage(content, type, image = null) {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${type}-message`;
+                messageDiv.innerHTML = content;
+                
+                // Add drone image if provided
+                if (image) {
+                    const imgElement = document.createElement('img');
+                    imgElement.src = `/drone_image/${image}`;
+                    imgElement.alt = "Drone camera view";
+                    imgElement.className = "drone-image";
+                    messageDiv.appendChild(document.createElement('br'));
+                    messageDiv.appendChild(imgElement);
+                }
+                
+                chatMessages.appendChild(messageDiv);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+
+            function handleUserInput() {
+                const message = userInput.value.trim();
+                if (message) {
+                    // Show user message
+                    appendMessage(message, 'user');
+                    userInput.value = '';
+                    
+                    // Show loading indicator
+                    const loadingDiv = document.createElement('div');
+                    loadingDiv.className = 'message assistant-message';
+                    loadingDiv.id = 'loading-message';
+                    loadingDiv.innerHTML = 'Processing your command... <div class="spinner-border spinner-border-sm" role="status"></div>';
+                    chatMessages.appendChild(loadingDiv);
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                    
+                    // Send to backend
+                    fetch('/chat', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ message: message }),
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        // Remove loading message
+                        const loadingMessage = document.getElementById('loading-message');
+                        if (loadingMessage) {
+                            loadingMessage.remove();
+                        }
+                        
+                        // Show assistant message if present
+                        if (data.assistant_message) {
+                            appendMessage(data.assistant_message, 'assistant');
+                        }
+                        
+                        // Show action results
+                        if (data.action_results && data.action_results.length > 0) {
+                            data.action_results.forEach(result => {
+                                appendMessage(result.message, 'action', result.image || null);
+                            });
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        const loadingMessage = document.getElementById('loading-message');
+                        if (loadingMessage) {
+                            loadingMessage.remove();
+                        }
+                        appendMessage('Error processing your request. Please try again.', 'assistant');
+                    });
+                }
+            }
+
+            // Event listeners
+            sendButton.addEventListener('click', handleUserInput);
+            userInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    handleUserInput();
+                }
+            });
+        });
+    </script>
+</body>
+</html>
