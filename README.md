@@ -8,3 +8,4 @@ pip install opencv-python
 pip install keyboard # for manual flying in record.py
 ```
 
+brew install portaudio
