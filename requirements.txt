@@ -1,0 +1,11 @@
+Flask==3.0.3
+python-dotenv==0.19.2
+openai==1.75.0
+PyAudio==0.2.14
+opencv-python==4.11.0.86
+numpy==2.2.4
+dotenv==0.9.9
+djitellopy==2.5.0
+transformers
+torch
+pillow
