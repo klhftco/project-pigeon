@@ -4,38 +4,55 @@ from collections import deque
 import numpy as np
 import time
 import pickle
+from ultralytics import YOLO
 
-def findFace(img):
+def findPerson(img, model):
     '''
     output:
         img - image overlay of tracking target
         info[0] - (x, y) coordinate of center of target in frame
         info[1] - area of target in frame
     '''
-    # return the image with bounding box around the face & the center of the face
-    faceCascade = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
-    imgGray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    faces = faceCascade.detectMultiScale(imgGray, 1.2, 8)
-
-    myFaceListC = []
-    myFaceListArea = []
-    for x, y, w, h in faces:
-        # draw bounding box around the face
-        cv2.rectangle(img, (x, y), (x + w, y + h), (0, 0, 255), 2)
-        cx = x + w // 2
-        cy = y + h // 2
-        area = w * h
+    # Run YOLOv8 inference
+    results = model(img, classes=[0])  # 0 is the class ID for 'person'
+    
+    # Get the first result
+    result = results[0]
+    boxes = result.boxes
+    
+    myPersonListC = []
+    myPersonListArea = []
+    
+    # Process each detected person
+    for box in boxes:
+        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+        
+        # Draw bounding box
+        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+        
+        # Calculate center and area
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+        area = (x2 - x1) * (y2 - y1)
+        
         cv2.circle(img, (cx, cy), 5, (0, 255, 0), cv2.FILLED)
-        myFaceListC.append([cx, cy])
-        myFaceListArea.append(area)
-    if len(myFaceListArea) != 0:
-        # return the face with the largest area
-        i = myFaceListArea.index(max(myFaceListArea))
-        return img, [myFaceListC[i], myFaceListArea[i]]
+        myPersonListC.append([cx, cy])
+        myPersonListArea.append(area)
+    
+    if len(myPersonListArea) != 0:
+        # Return the person with the largest area
+        i = myPersonListArea.index(max(myPersonListArea))
+        return img, [myPersonListC[i], myPersonListArea[i]]
     else:
         return img, [[0, 0], 0]
 
 def main():
+    # Load YOLOv8 model
+    print("Loading YOLOv8 model...")
+    model = YOLO('yolov8n.pt')
+    print("Model loaded successfully!")
+
     tello = Tello()
     tello.connect()
     print(tello.get_battery())
@@ -43,7 +60,7 @@ def main():
 
     while True:
         img = tello.get_frame_read().frame
-        img, info = findFace(img) # TODO: swap out with YOLO
+        img, info = findPerson(img, model)
         cv2.imshow("Output", img)
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
