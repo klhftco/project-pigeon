@@ -1,0 +1,3 @@
+[submodule "dji-tello-collision-avoidance-pydnet"]
+	path = dji-tello-collision-avoidance-pydnet
+	url = https://github.com/dronefreak/dji-tello-collision-avoidance-pydnet
