@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Drone Control </title>
+    <title>Drone Control System</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body {
@@ -23,6 +23,25 @@
             color: white;
             padding: 15px;
             text-align: center;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .chat-header h2 {
+            margin: 0;
+        }
+        .mode-indicator {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .mode-online {
+            background-color: #28a745;
+        }
+        .mode-offline {
+            background-color: #dc3545;
         }
         .chat-messages {
             height: 400px;
@@ -67,6 +86,22 @@
             margin-top: 10px;
             display: block;
         }
+        .command-suggestion {
+            display: inline-block;
+            margin: 5px;
+            padding: 5px 10px;
+            background-color: #f0f0f0;
+            border-radius: 15px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .command-suggestion:hover {
+            background-color: #e0e0e0;
+        }
+        .command-suggestions {
+            margin-top: 10px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -74,15 +109,27 @@
         <div class="chat-container">
             <div class="chat-header">
                 <h2><span class="drone-icon">🚁</span> Drone Control</h2>
+                <div class="mode-indicator mode-online" id="mode-indicator">Online Mode</div>
             </div>
             <div class="chat-messages" id="chat-messages">
                 <div class="message assistant-message">
-                   Commands: "Find the person in a yellow hat", "Move closer to the target", "Spin around target", "Show me the camera view"               
+                    Welcome to the Drone Control System. You can control the drone with natural language commands.
                 </div>
+            </div>
+            <div class="command-suggestions">
+                <span class="command-suggestion" onclick="selectCommand(this)">Find person with red shirt</span>
+                <span class="command-suggestion" onclick="selectCommand(this)">Move closer</span>
+                <span class="command-suggestion" onclick="selectCommand(this)">Move away</span>
+                <span class="command-suggestion" onclick="selectCommand(this)">Spin around</span>
+                <span class="command-suggestion" onclick="selectCommand(this)">Show me the camera view</span>
             </div>
             <div class="input-group">
                 <input type="text" id="user-input" class="form-control" placeholder="Type your command here...">
                 <button class="btn btn-primary" id="send-button">Send</button>
+            </div>
+            <div class="input-group">
+                <button class="btn btn-secondary btn-sm" id="toggle-mode-button">Toggle Online/Offline Mode</button>
+                <button class="btn btn-danger btn-sm ms-2" id="shutdown-button">Shutdown Drone</button>
             </div>
         </div>
     </div>
@@ -92,6 +139,32 @@
             const chatMessages = document.getElementById('chat-messages');
             const userInput = document.getElementById('user-input');
             const sendButton = document.getElementById('send-button');
+            const toggleModeButton = document.getElementById('toggle-mode-button');
+            const shutdownButton = document.getElementById('shutdown-button');
+            const modeIndicator = document.getElementById('mode-indicator');
+            
+            let isOfflineMode = false;
+
+            // Check initial status
+            fetch('/status')
+                .then(response => response.json())
+                .then(data => {
+                    isOfflineMode = data.offline_mode;
+                    updateModeIndicator();
+                })
+                .catch(error => console.error('Error fetching status:', error));
+
+            function updateModeIndicator() {
+                if (isOfflineMode) {
+                    modeIndicator.textContent = 'Offline Mode';
+                    modeIndicator.classList.remove('mode-online');
+                    modeIndicator.classList.add('mode-offline');
+                } else {
+                    modeIndicator.textContent = 'Online Mode';
+                    modeIndicator.classList.remove('mode-offline');
+                    modeIndicator.classList.add('mode-online');
+                }
+            }
 
             function appendMessage(content, type, image = null) {
                 const messageDiv = document.createElement('div');
@@ -143,6 +216,12 @@
                             loadingMessage.remove();
                         }
                         
+                        // Update offline mode status if included in response
+                        if (data.hasOwnProperty('offline_mode')) {
+                            isOfflineMode = data.offline_mode;
+                            updateModeIndicator();
+                        }
+                        
                         // Show assistant message if present
                         if (data.assistant_message) {
                             appendMessage(data.assistant_message, 'assistant');
@@ -166,6 +245,30 @@
                 }
             }
 
+            function toggleMode() {
+                fetch('/toggle_mode')
+                    .then(response => response.json())
+                    .then(data => {
+                        isOfflineMode = data.offline_mode;
+                        updateModeIndicator();
+                        appendMessage(`Switched to ${isOfflineMode ? 'Offline' : 'Online'} Mode`, 'assistant');
+                    })
+                    .catch(error => console.error('Error toggling mode:', error));
+            }
+
+            function shutdownDrone() {
+                if (confirm('Are you sure you want to shutdown the drone?')) {
+                    fetch('/shutdown', {
+                        method: 'POST',
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        appendMessage(data.message, 'assistant');
+                    })
+                    .catch(error => console.error('Error shutting down drone:', error));
+                }
+            }
+
             // Event listeners
             sendButton.addEventListener('click', handleUserInput);
             userInput.addEventListener('keypress', function(e) {
@@ -173,7 +276,14 @@
                     handleUserInput();
                 }
             });
+            
+            toggleModeButton.addEventListener('click', toggleMode);
+            shutdownButton.addEventListener('click', shutdownDrone);
         });
+
+        function selectCommand(element) {
+            document.getElementById('user-input').value = element.textContent;
+        }
     </script>
 </body>
 </html>
