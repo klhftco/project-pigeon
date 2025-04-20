@@ -1,228 +1,383 @@
 import cv2
-from djitellopy import Tello
-from collections import deque
-import numpy as np
 import time
-import pickle
+import numpy as np
+import threading
+import subprocess
+from collections import deque
+from queue import Queue, Empty
+from djitellopy import Tello
 from ultralytics import YOLO
+import argparse
+from datetime import datetime
 
-# Configuration
-TARGET_MIN_SIZE = 40000  # Minimum area in pixels (~1.5m distance)
-TARGET_MAX_SIZE = 80000  # Maximum area in pixels (~2m distance)
+class VideoStream:
+    def __init__(self, max_queue_size=3):
+        self.tello = Tello()
+        self.frame_queue = Queue(maxsize=max_queue_size)
+        self.stop_event = threading.Event()
+        self.stream_thread = None
+        self.last_frame_time = time.time()
+        self.frame_count = 0
+        self.fps = 0
+        self.width, self.height = 1280, 720  # Tello video resolution
+        self.frame_size = self.width * self.height * 3  # 3 bytes per pixel (BGR24)
+        self.ffmpeg_process = None
 
-# --- Drone Setup ---
-tello = Tello()
-tello.connect()
-battery = tello.get_battery()
-print(f"Tello battery: {battery}%")
+    def start_stream(self):
+        """Start the video stream thread immediately"""
+        self.stream_thread = threading.Thread(target=self._stream_loop)
+        self.stream_thread.daemon = True
+        self.stream_thread.start()
+        return self
 
-if battery < 20:
-    print("WARNING: Battery level is low! Landing...")
-    tello.land()
-    exit()
+    def _start_ffmpeg(self):
+        """Start FFmpeg process to capture video stream"""
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-i", "udp://0.0.0.0:11111",  # Tello's default video stream address
+            "-pix_fmt", "bgr24",           # pixel format for OpenCV (BGR)
+            "-f", "rawvideo",
+            "-"
+        ]
+        self.ffmpeg_process = subprocess.Popen(
+            ffmpeg_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=10**7
+        )
 
-print("Waiting for drone to stabilize...")
-time.sleep(5)
+    def _stream_loop(self):
+        """Main streaming loop using FFmpeg"""
+        try:
+            self._start_ffmpeg()
+            while not self.stop_event.is_set():
+                try:
+                    # Read raw frame from FFmpeg
+                    raw_frame = self.ffmpeg_process.stdout.read(self.frame_size)
+                    if not raw_frame:
+                        print("FFmpeg stream ended, restarting...")
+                        self._start_ffmpeg()
+                        continue
 
-print("Starting video stream...")
-tello.streamon()
-time.sleep(2)
+                    # Convert raw frame to numpy array
+                    frame = np.frombuffer(raw_frame, np.uint8).reshape((self.height, self.width, 3))
 
-# --- Takeoff with retry ---
-max_retries = 3
-for attempt in range(max_retries):
-    try:
-        print(f"Takeoff attempt {attempt + 1}...")
-        tello.takeoff()
-        print("Takeoff successful!")
-        break
-    except Exception as e:
-        print(f"Takeoff attempt {attempt + 1} failed: {str(e)}")
-        if attempt == max_retries - 1:
-            print("All takeoff attempts failed. Please check the drone and try again.")
-            tello.streamoff()
-            exit()
-        time.sleep(2)
+                    # Calculate FPS
+                    self.frame_count += 1
+                    current_time = time.time()
+                    if current_time - self.last_frame_time >= 1.0:
+                        self.fps = self.frame_count
+                        self.frame_count = 0
+                        self.last_frame_time = current_time
 
-# --- Initial height adjustment ---
-tello.send_rc_control(0, 0, 25, 0)
-time.sleep(3)
+                    # Put frame in queue
+                    if self.frame_queue.full():
+                        self.frame_queue.get_nowait()
+                    self.frame_queue.put_nowait(frame)
 
-# --- Detection Function ---
-def findPerson(img, model):
-    results = model(img, classes=[0])  # Class 0 = person
-    result = results[0]
-    boxes = result.boxes
+                except Exception as e:
+                    print(f"Stream error: {e}")
+                    time.sleep(0.1)  # Brief pause before retrying
 
-    myPersonListC = []
-    myPersonListArea = []
-    person_area_queue.clear()
+        finally:
+            if self.ffmpeg_process:
+                self.ffmpeg_process.terminate()
+                self.ffmpeg_process.wait()
 
-    for box in boxes:
-        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+    def get_frame(self, timeout=0.1):
+        """Get the latest frame from the queue"""
+        try:
+            return self.frame_queue.get(timeout=timeout)
+        except Empty:
+            return None
 
-        area = (x2 - x1) * (y2 - y1)
+    def get_fps(self):
+        """Get current FPS"""
+        return self.fps
 
-        if area < TARGET_MIN_SIZE:
-            color = (0, 255, 255)  # Yellow - too far
-        elif area > TARGET_MAX_SIZE:
-            color = (255, 0, 0)    # Blue - too close
-        else:
-            color = (0, 255, 0)    # Green - perfect distance
+    def stop(self):
+        """Stop the video stream"""
+        self.stop_event.set()
+        if self.ffmpeg_process:
+            self.ffmpeg_process.terminate()
+            self.ffmpeg_process.wait()
+        if self.stream_thread:
+            self.stream_thread.join()
 
-        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+class FrameProcessor:
+    def __init__(self, model, config):
+        self.model = model
+        self.config = config
+        self.processed_queue = Queue(maxsize=3)
+        self.stop_event = threading.Event()
+        self.process_thread = None
+        self.frame_count = 0
+        self.processing_time = 0
+        self.last_time = time.time()
 
-        cx = (x1 + x2) // 2
-        cy = (y1 + y2) // 2
+    def start_processing(self, frame_queue):
+        """Start the processing thread"""
+        self.process_thread = threading.Thread(target=self._process_loop, args=(frame_queue,))
+        self.process_thread.daemon = True
+        self.process_thread.start()
+        return self
 
-        conf = box.conf[0].item()
-        cv2.putText(img, f'Conf: {conf:.2f}', (x1, y1 - 20), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-        cv2.putText(img, f'Area: {area}', (x1, y1 - 5), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+    def _process_loop(self, frame_queue):
+        """Main processing loop"""
+        while not self.stop_event.is_set():
+            try:
+                frame = frame_queue.get(timeout=0.1)
+                if frame is not None:
+                    start_time = time.time()
+                    processed_frame, info = self.process_frame(frame)
+                    self.processing_time = time.time() - start_time
+                    
+                    if self.processed_queue.full():
+                        self.processed_queue.get_nowait()
+                    self.processed_queue.put_nowait((processed_frame, info))
+            except Empty:
+                continue
+            except Exception as e:
+                print(f"Processing error: {e}")
 
-        if area < TARGET_MIN_SIZE:
-            status = "Too far"
-        elif area > TARGET_MAX_SIZE:
-            status = "Too close"
-        else:
-            status = "Good distance"
-        cv2.putText(img, status, (x1, y2 + 20), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    def process_frame(self, frame):
+        """Process a single frame with YOLO"""
+        try:
+            results = self.model(frame, classes=[0])[0]
+            boxes = results.boxes
 
-        cv2.circle(img, (cx, cy), 5, (0, 255, 0), cv2.FILLED)
-        myPersonListC.append([cx, cy])
-        myPersonListArea.append(area)
+            candidates = []
+            for box in boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
+                area = (x2 - x1) * (y2 - y1)
+                cx = (x1 + x2) // 2
+                cy = (y1 + y2) // 2
+                candidates.append(((cx, cy), area, box.conf[0].item(), (x1, y1, x2, y2)))
 
-    if myPersonListArea:
-        i = myPersonListArea.index(max(myPersonListArea))
-        return img, [myPersonListC[i], myPersonListArea[i]]
-    else:
-        return img, [[0, 0], 0]
+            if not candidates:
+                return frame, [[0, 0], 0]
 
-# --- Queues for smoothing ---
-x_error_queue = deque(maxlen=100)
-y_error_queue = deque(maxlen=100)
-person_coord_queue = deque(maxlen=20)
-person_area_queue = deque(maxlen=10)
+            best = max(candidates, key=lambda c: c[1])
+            (cx, cy), area, conf, (x1, y1, x2, y2) = best
 
-# --- Tracking Function ---
-def trackPerson(info, pid, px_error, py_error, fbRange=[TARGET_MIN_SIZE, TARGET_MAX_SIZE]):
-    (x_raw, y_raw), area = info
-    person_coord_queue.append((x_raw, y_raw))
-    person_area_queue.append(area)
+            color = (0, 255, 255) if area < self.config["TARGET_MIN_SIZE"] else (255, 0, 0) if area > self.config["TARGET_MAX_SIZE"] else (0, 255, 0)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(frame, f'Conf: {conf:.2f}', (x1, y1 - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+            cv2.putText(frame, f'Area: {area}', (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+            cv2.putText(frame, "Good distance" if color == (0, 255, 0) else ("Too far" if color == (0, 255, 255) else "Too close"),
+                        (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            cv2.circle(frame, (cx, cy), 5, (0, 255, 0), cv2.FILLED)
 
-    h, w = 720, 960
+            return frame, [[cx, cy], area]
+        except Exception as e:
+            print(f"Processing error: {e}")
+            return frame, [[0, 0], 0]
 
-    valid_coords = [coord for coord in person_coord_queue if coord != (0, 0)]
-    if valid_coords:
-        x = int(np.mean([c[0] for c in valid_coords]))
-        y = int(np.mean([c[1] for c in valid_coords]))
-    else:
-        x, y = 0, 0
+    def get_processed_frame(self, timeout=0.1):
+        """Get the latest processed frame"""
+        try:
+            return self.processed_queue.get(timeout=timeout)
+        except Empty:
+            return None, None
 
-    valid_areas = [a for a in person_area_queue if a > 0]
-    avg_area = int(np.mean(valid_areas)) if valid_areas else 0
+    def get_processing_stats(self):
+        """Get processing statistics"""
+        return {
+            "processing_time": self.processing_time,
+            "fps": 1.0 / self.processing_time if self.processing_time > 0 else 0
+        }
+
+    def stop(self):
+        """Stop the processing thread"""
+        self.stop_event.set()
+        if self.process_thread:
+            self.process_thread.join()
+
+class DroneController:
+    def __init__(self, config):
+        self.config = config
+        self.video_stream = VideoStream()
+        self.frame_processor = FrameProcessor(YOLO(config["yolo_model"]), config)
+        self.state = "SEARCHING"
+        self.lost_counter = 0
+        self.confirm_counter = 0
+        self.px_error = 0
+        self.py_error = 0
+        self.x_error_queue = deque(maxlen=100)
+        self.y_error_queue = deque(maxlen=100)
+        self.stop_event = threading.Event()
+        self.last_command_time = time.time()
+        self.command_interval = 0.1  # Minimum time between commands
+
+    def connect_and_prepare(self):
+        try:
+            # Start video stream immediately
+            self.video_stream.start_stream()
+            
+            # Connect to drone
+            print("Connecting to Tello...")
+            self.video_stream.tello.connect()
+            battery = self.video_stream.tello.get_battery()
+            print(f"Battery: {battery}%")
+            if battery < 20:
+                print("WARNING: Low battery. Please charge.")
+
+            # Initialize stream
+            print("Initializing video stream...")
+            self.video_stream.tello.streamon()
+            time.sleep(1)  # Reduced from 2 to 1 second
+
+            # Start frame processing
+            self.frame_processor.start_processing(self.video_stream.frame_queue)
+
+            print("Taking off...")
+            self.video_stream.tello.takeoff()
+            time.sleep(1)  # Reduced from 2 to 1 second
+
+            print("Ascending to ~1.8m height...")
+            start_time = time.time()
+            while self.video_stream.tello.get_height() < 180 and time.time() - start_time < 10:  # Added timeout
+                self.video_stream.tello.send_rc_control(0, 0, 25, 0)
+                time.sleep(0.05)  # Reduced from 0.1 to 0.05
+            self.video_stream.tello.send_rc_control(0, 0, 0, 0)
+            self.video_stream.tello.send_rc_control(0, 0, 0, 15)
+
+        except Exception as e:
+            print(f"Initialization error: {e}")
+            self.emergency_land()
+            raise
+
+    def emergency_land(self):
+        """Emergency landing procedure"""
+        try:
+            print("EMERGENCY LANDING!")
+            self.video_stream.tello.land()
+            self.video_stream.tello.streamoff()
+        except:
+            pass
+
+    def send_control(self, lr, fb, ud, yaw):
+        """Send control commands with rate limiting"""
+        current_time = time.time()
+        if current_time - self.last_command_time >= self.command_interval:
+            try:
+                self.video_stream.tello.send_rc_control(lr, fb, ud, yaw)
+                self.last_command_time = current_time
+            except Exception as e:
+                print(f"Control error: {e}")
+
+    def track_person(self, info):
+    (x, y), area = info
+    w, h = 960, 720
 
     if x == 0 or y == 0:
-        x_error = y_error = x_speed = y_speed = fb = z_speed = 0
-        # Print search mode status
-        print("\n=== SEARCH MODE ===")
-        print("No person detected")
-        print("Turning slowly to search...")
-    else:
+            self.send_control(0, 0, 0, 0)
+            return
+
         x_error = x - w // 2
         y_error = y - h // 4
 
-        # Print tracking mode status
-        print("\n=== TRACKING MODE ===")
-        print(f"Person detected at position: ({x}, {y})")
-        print(f"Target area: {avg_area} (desired range: {fbRange[0]}-{fbRange[1]})")
-        print(f"Position error: ({x_error}, {y_error})")
+        x_speed = self.config["pid"][0] * x_error + self.config["pid"][1] * (x_error - self.px_error) + self.config["pid"][2] * sum(self.x_error_queue)
+        y_speed = self.config["pid"][0] * y_error + self.config["pid"][1] * (y_error - self.py_error) + self.config["pid"][2] * sum(self.y_error_queue)
 
-        x_speed = pid[0] * x_error + pid[1] * (x_error - px_error) + pid[2] * sum(x_error_queue)
         x_speed = int(np.clip(x_speed, -100, 100))
-
-        y_speed = pid[0] * y_error + pid[1] * (y_error - py_error) + pid[2] * sum(y_error_queue)
         y_speed = int(np.clip(-0.5 * y_speed, -40, 40))
 
-        if avg_area > fbRange[1]:
-            fb = -20
-            print("Moving BACKWARD - Person too close")
-        elif avg_area < fbRange[0] and avg_area != 0:
-            fb = 20
-            print("Moving FORWARD - Person too far")
-        else:
-            fb = 0
-            print("Maintaining distance - Person at ideal range")
+        fb = -20 if area > self.config["TARGET_MAX_SIZE"] else 20 if area < self.config["TARGET_MIN_SIZE"] else 0
+        z_speed = -10 if self.video_stream.tello.get_height() > 220 else 0
 
-        z_speed = -10 if tello.get_height() > 220 else 0
-        if z_speed != 0:
-            print("Adjusting height - Too high")
+        self.send_control(0, fb, z_speed, x_speed)
+        self.px_error = x_error
+        self.py_error = y_error
+        self.x_error_queue.append(x_error)
+        self.y_error_queue.append(y_error)
 
-    # if no target detected, rotate in place to search
-    if x == 0 or y == 0:
-        turn_dir = -1
-        if sum([1 for x, y in person_coord_queue if x == 0 and y == 0]) > 15:
-            print(f"Turning {'left' if turn_dir == -1 else 'right'} at speed {turn_dir * 15}")
-            tello.send_rc_control(0, 0, 0, turn_dir * 15)
+    def run(self):
+        try:
+            print("\n=== DRONE TRACKING STARTED ===")
+            print("Press 'q' to quit\n")
+
+            while not self.stop_event.is_set():
+                processed_frame, info = self.frame_processor.get_processed_frame()
+                if processed_frame is None:
+                    continue
+
+                # Add FPS and processing time to frame
+                stream_fps = self.video_stream.get_fps()
+                proc_stats = self.frame_processor.get_processing_stats()
+                cv2.putText(processed_frame, f'Stream FPS: {stream_fps}', (10, 30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                cv2.putText(processed_frame, f'Proc FPS: {proc_stats["fps"]:.1f}', (10, 60),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                cv2.putText(processed_frame, f'Proc Time: {proc_stats["processing_time"]*1000:.1f}ms', (10, 90),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+
+                area = info[1]
+                if self.state == "SEARCHING":
+                    if self.config["TARGET_MIN_SIZE"] < area < self.config["TARGET_MAX_SIZE"]:
+                        self.confirm_counter += 1
+                        print(f"Confirming target... ({self.confirm_counter}/{self.config['CONFIRMATION_FRAMES']})")
+                        if self.confirm_counter >= self.config["CONFIRMATION_FRAMES"]:
+                            print("Target confirmed. Switching to TRACKING.")
+                            self.send_control(0, 0, 0, 0)
+                            self.state = "TRACKING"
+                            self.lost_counter = 0
+                            self.confirm_counter = 0
         else:
-            print("Pausing turn - Checking for person")
-            tello.send_rc_control(0, 0, 0, 0)
+                        self.confirm_counter = 0
+                elif self.state == "TRACKING":
+                    if area == 0:
+                        self.lost_counter += 1
+                        print(f"Lost target ({self.lost_counter}/{self.config['MAX_LOST_FRAMES']})")
+                        if self.lost_counter >= self.config["MAX_LOST_FRAMES"]:
+                            print("Target lost. Returning to SEARCHING mode.")
+                            self.send_control(0, 0, 0, 15)
+                            self.state = "SEARCHING"
     else:
-        print(f"Movement commands: Forward/Back={fb}, Left/Right={x_speed}, Up/Down={z_speed}")
-        tello.send_rc_control(0, fb, z_speed, x_speed)
+                        self.lost_counter = 0
+                        self.track_person(info)
 
-    x_error_queue.append(x_error)
-    y_error_queue.append(y_error)
-    time.sleep(0.1)
+                cv2.imshow("Tello Tracking", processed_frame)
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
 
-    return x_error, y_error
+        except KeyboardInterrupt:
+            print("\n=== EMERGENCY STOP ===")
+        except Exception as e:
+            print(f"\n=== ERROR: {str(e)} ===")
+        finally:
+            self.stop_event.set()
+            self.frame_processor.stop()
+            self.video_stream.stop()
+            self.emergency_land()
+            cv2.destroyAllWindows()
 
-# --- Main Loop ---
-def main():
-    # Load YOLOv8 model
-    model = YOLO('yolov8n.pt')
-    model.predict(np.zeros((720, 960, 3), dtype=np.uint8), classes=[0])  # warm-up
-
-    pid = [0.2, 0.04, 0.005]
-    px_error = py_error = 0
-    prev_time = time.time()
-
-    print("\n=== DRONE TRACKING STARTED ===")
-    print(f"Target size range: {TARGET_MIN_SIZE}-{TARGET_MAX_SIZE} pixels")
-    print("Press 'q' to quit\n")
-
-    try:
-        while True:
-            img = tello.get_frame_read().frame
-            img, info = findPerson(img, model)
-            px_error, py_error = trackPerson(info, pid, px_error, py_error)
-
-            fps = 1 / (time.time() - prev_time)
-            prev_time = time.time()
-            cv2.putText(img, f'FPS: {fps:.2f}', (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-
-            cv2.imshow("Tello Tracking", img)
-
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                print("\n=== MANUAL LANDING INITIATED ===")
-                tello.land()
-                break
-    except KeyboardInterrupt:
-        print("\n=== EMERGENCY STOP ===")
-        print("Keyboard interrupt detected")
-    finally:
-        print("\n=== CLEANUP ===")
-        print("Landing drone...")
-        tello.land()
-        print("Stopping video stream...")
-        tello.streamoff()
-        print("Closing windows...")
-        cv2.destroyAllWindows()
-        print("=== DRONE TRACKING ENDED ===\n")
+def parse_args():
+    parser = argparse.ArgumentParser(description='Tello Drone Person Tracking')
+    parser.add_argument('--min-size', type=int, default=40000,
+                        help='Minimum target size in pixels')
+    parser.add_argument('--max-size', type=int, default=80000,
+                        help='Maximum target size in pixels')
+    parser.add_argument('--lost-frames', type=int, default=10,
+                        help='Number of frames to tolerate losing sight')
+    parser.add_argument('--confirm-frames', type=int, default=5,
+                        help='Number of frames required to confirm target')
+    parser.add_argument('--model', type=str, default='yolov8n.pt',
+                        help='YOLO model to use')
+    return parser.parse_args()
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    
+    config = {
+        "TARGET_MIN_SIZE": args.min_size,
+        "TARGET_MAX_SIZE": args.max_size,
+        "MAX_LOST_FRAMES": args.lost_frames,
+        "CONFIRMATION_FRAMES": args.confirm_frames,
+        "yolo_model": args.model,
+        "pid": [0.2, 0.04, 0.005]
+    }
+
+    controller = DroneController(config)
+    controller.connect_and_prepare()
+    controller.run()
