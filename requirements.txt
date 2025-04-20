@@ -10,3 +10,6 @@ tello-sdk==1.0.0
 numpy==2.2.4
 dotenv==0.9.9
 djitellopy==2.5.0
+transformers
+torch
+pillow
