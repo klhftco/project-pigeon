@@ -15,7 +15,8 @@ try:
     from djitellopy import Tello
     TELLO_AVAILABLE = True
     # from drone_tracker.drone_controller import DroneController
-    from drone_tracker.drone_tracker_face_owl import DroneFaceTrackerOwl
+    from drone_tracker.drone_tracker_face_owl import DroneFaceTrackerOwl # OwlVit
+    from drone_tracker.drone_tracker_face import DroneFaceTracker # YOLO
 except ImportError:
     print("WARNING: djitellopy not found. Drone functionality will be simulated.")
     TELLO_AVAILABLE = False
@@ -119,7 +120,8 @@ class TelloController():
 
         self.is_flying = False
         self.frame_read = None
-        self.mission_controller = DroneFaceTrackerOwl(tello=self.tello)
+        # self.mission_controller = DroneFaceTrackerOwl(tello=self.tello) # OWL
+        self.mission_controller = DroneFaceTracker(tello=self.tello) # YOLO
 
         if connect_on_init and TELLO_AVAILABLE:
             self.connect()
@@ -452,7 +454,7 @@ def parse_offline_command(message):
     # Look for person/object
     if "look for" in message or "find" in message or "search for" in message:
         # Extract what to look for
-        target = message.split("for")[-1].strip() if "for" in message else "person"
+        target = message.split("find")[-1].strip() if "find" in message else "person"
         function_calls.append({
             "name": "locate_person",
             "arguments": {"point_of_interest": target}

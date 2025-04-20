@@ -235,6 +235,19 @@ class DroneFaceTracker:
             print(f"❌ Setup error: {e}")
             return False
 
+    def initialize_video_ui(self):
+        """Starts video stream and initializes OpenCV window and mouse tracking."""
+        try:
+            self.tello.streamon()
+            cv2.namedWindow(self.window_name)
+            cv2.setMouseCallback(self.window_name, self.tracker.handle_mouse_click)
+            time.sleep(3)
+            self.frame_reader = self.tello.get_frame_read()
+            return True
+        except Exception as e:
+            print(f"❌ Video/UI init error: {e}")
+            return False
+
     def _draw_overlay(self, frame, confirmed_tracks, target_relative_pos=None):
         """Draw tracking boxes, face info, status and help text."""
         height, width = frame.shape[:2]
@@ -337,10 +350,13 @@ class DroneFaceTracker:
         cv2.putText(frame, status_text, (10, height - 20),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
 
-    def run(self):
-        if not self.setup():
-            print("Setup failed. Exiting.")
-            return
+    def run(self, connected=False, target_texts=None):
+        if not connected:
+            if not self.setup():
+                print("Setup failed. Exiting.")
+                return
+        else:
+            self.initialize_video_ui()
 
         try:
             while True:
@@ -562,6 +578,9 @@ class DroneFaceTracker:
                         try:
                             self.tello.takeoff()
                             self.is_flying = True
+                            time.sleep(1)
+                            print("raising altitude...")
+                            self.tello.move_up(70)
                         except Exception as e:
                             print(f"❌ Takeoff failed: {e}")
                     else:
