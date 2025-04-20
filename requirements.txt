@@ -9,3 +9,7 @@ djitellopy==2.5.0
 transformers
 torch
 pillow
+ultralytics
+
+# clip
+git+https://github.com/openai/CLIP.git
