@@ -17,36 +17,37 @@ class YOLOProcessor:
         self.model = YOLO(model_path)
         self.model.to(self.device)
         
-        # Initialize DeepSORT tracker
+        # Initialize DeepSORT tracker with optimized settings
         self.tracker = DeepSort(
-            max_age=30,  # Maximum number of missed misses before a track is deleted
-            n_init=3,    # Number of frames that a track remains in initialization phase
-            nms_max_overlap=1.0,  # Non-maxima suppression threshold
-            max_cosine_distance=0.3,  # Gating threshold for cosine distance
-            nn_budget=None,  # Maximum size of the appearance descriptors
+            max_age=15,  # Reduced from 30 to remove tracks faster
+            n_init=2,    # Reduced from 3 for faster track initialization
+            nms_max_overlap=1.0,
+            max_cosine_distance=0.4,  # Increased from 0.3 for more lenient matching
+            nn_budget=50,  # Limit the number of stored features
             override_track_class=None,
-            embedder="mobilenet",  # Feature extractor
+            embedder="mobilenet",  # Use lightweight feature extractor
             half=True,  # Use half precision
-            bgr=True,  # Expect BGR images
-            embedder_gpu=True  # Use GPU for feature extraction if available
+            bgr=True,
+            embedder_gpu=True
         )
         
-        self.input_queue = Queue(maxsize=2)  # Small queue to prevent lag
+        self.input_queue = Queue(maxsize=2)
         self.output_queue = Queue(maxsize=2)
         self.stop_event = threading.Event()
         self.process_thread = None
         self.frame_count = 0
         self.last_frame_time = time.time()
         self.fps = 0
-        self.is_ready = False  # Flag to indicate if processor is ready
+        self.is_ready = False
         
-        # Optimized YOLO input size (smaller but still effective)
-        self.yolo_width = 640  # Reduced from 736
-        self.yolo_height = 640  # Reduced from 736
+        # Optimized YOLO input size
+        self.yolo_width = 640
+        self.yolo_height = 640
         
-        # Frame skipping for better performance
-        self.frame_skip = 1  # Process every other frame
+        # Increased frame skip for better performance
+        self.frame_skip = 2  # Process every third frame
         self.frame_counter = 0
+        self.tracking_interval = 3  # Only run tracking every N frames
 
     def start_processing(self):
         """Start the YOLO processing thread"""
@@ -75,8 +76,8 @@ class YOLOProcessor:
                                    classes=[0],  # Only detect people
                                    imgsz=self.yolo_height,
                                    conf=0.5,  # Higher confidence threshold
-                                   verbose=False,  # Disable verbose output
-                                   device=self.device)  # Use specified device
+                                   verbose=False,
+                                   device=self.device)
                 
                 # Convert YOLO detections to DeepSORT format
                 detections = []
@@ -85,8 +86,12 @@ class YOLOProcessor:
                     conf = box.conf[0].item()
                     detections.append(([x1, y1, x2-x1, y2-y1], conf, 'person'))
                 
-                # Update tracker
-                tracks = self.tracker.update_tracks(detections, frame=frame)
+                # Only run tracking every N frames
+                if self.frame_counter % self.tracking_interval == 0:
+                    tracks = self.tracker.update_tracks(detections, frame=frame)
+                else:
+                    # Use last known tracks
+                    tracks = self.tracker.tracks
                 
                 # Draw tracked objects
                 processed_frame = frame.copy()
@@ -124,7 +129,7 @@ class YOLOProcessor:
                 self.output_queue.put_nowait(processed_frame)
 
             except Exception as e:
-                if self.is_ready:  # Only print errors if processor is ready
+                if self.is_ready:
                     print(f"Processing error: {e}")
                 time.sleep(0.1)
 
@@ -134,7 +139,7 @@ class YOLOProcessor:
             if self.input_queue.full():
                 self.input_queue.get_nowait()
             self.input_queue.put_nowait(frame)
-            self.is_ready = True  # Mark processor as ready after first frame
+            self.is_ready = True
 
     def get_processed_frame(self):
         """Get the latest processed frame"""
