@@ -5,6 +5,8 @@ import numpy as np
 import time
 import pickle
 
+from owlvit_detector import findBoundingBox
+
 tello = Tello()
 tello.connect()
 print(tello.get_battery())
@@ -12,12 +14,13 @@ print(tello.get_battery())
 tello.streamon()
 time.sleep(1)
 tello.takeoff()
-for i in range(20):
+for i in range(5):
     tello.send_rc_control(0, 0, 25, 0)
 
-# calibrated feature size area
+# calibrated feature size area, ideally gets replaced by something like monodepth
 feature_sizes = {
     "shirt": [24000, 25000], # min 18000
+    "chair": [24000, 25000], # min 18000
     "face": [14000, 15000],
     "person": [14000, 15000],
 }
@@ -58,12 +61,15 @@ def findFace(img):
 # initialize center coord, error queues
 x_error_queue = deque(maxlen=100)
 y_error_queue = deque(maxlen=100)
-face_coord_queue = deque(maxlen=20)
+target_coord_queue = deque(maxlen=20)
 
 def trackFace(info, pid, px_error, py_error, fbRange):
     (x, y), area = info
     w, h = 960, 720
-    face_coord_queue.append((x, y))
+    # if x > 0 or y > 0:
+    target_coord_queue.append((x, y))
+    # tello.send_rc_control(0, 0, 0, 0)
+    # return 0, 0
 
     # reset errors if no face is detected
     if x == 0 or y == 0:
@@ -81,7 +87,8 @@ def trackFace(info, pid, px_error, py_error, fbRange):
 
         # calculate vx, vy based on pid controller, pseudo-integration
         x_speed = pid[0] * x_error + pid[1] * (x_error - px_error) + pid[2] * sum(x_error_queue)
-        x_speed = int(np.clip(x_speed, -100, 100))
+        # x_speed = int(np.clip(x_speed, -100, 100))
+        x_speed = int(np.clip(x_speed, -20, 20))
 
         y_speed = pid[0] * y_error + pid[1] * (y_error - py_error) + pid[2] * sum(y_error_queue)
         y_speed = int(np.clip(-0.5 * y_speed, -40, 40))
@@ -101,8 +108,8 @@ def trackFace(info, pid, px_error, py_error, fbRange):
     # if no target detected, rotate in place to search
     if x == 0 or y == 0:
         turn_dir = -1 if x < w // 2 else 1
-        if sum([1 for x, y in face_coord_queue if x == 0 and y == 0]) > 15:
-            tello.send_rc_control(0, 0, 0, turn_dir * 40)
+        if sum([1 for x, y in target_coord_queue if x == 0 and y == 0]) > 17:
+            tello.send_rc_control(0, 0, 0, turn_dir * 10)
         else:
             tello.send_rc_control(0, 0, 0, 0)
     else:
@@ -124,8 +131,13 @@ def main():
 
     while True:
         img = tello.get_frame_read().frame
-        img, info, obj = findShirt(img) # TODO: swap out with YOLO
+        # img, info, obj = findShirt(img) # TODO: swap out with YOLO
+        img = cv2.resize(img, (480, 360))
+        print(target_coord_queue)
+        img, info, obj = findBoundingBox(img, labels=["a chair"])
+        obj = "chair"
         fbRange = feature_sizes[obj]
+        print(info)
         px_error, py_error = trackFace(info, pid, px_error, py_error, fbRange)
         cv2.imshow("Output", img)
 

@@ -23,10 +23,13 @@ import argparse
 from pathlib import Path
 from typing import List
 import time
-import select # Add select
-import sys # Add sys
-import termios # Add termios for terminal settings
-import tty # Add tty for terminal settings
+# import select # Add select
+# import sys # Add sys
+# import termios # Add termios for terminal settings
+# import tty # Add tty for terminal settings
+import threading
+import queue
+
 
 import cv2                                   # webcam capture & drawing
 from transformers import (
@@ -110,13 +113,24 @@ def detect(
 
 def main() -> None:
     args = parse_args()
+    input_queue = queue.Queue()
+
+    def listen_for_input():
+        while True:
+            user_input = input("\nEnter new labels (comma-separated), or 'exit' to quit: ")
+            input_queue.put(user_input)
+
+    input_thread = threading.Thread(target=listen_for_input, daemon=True)
+    input_thread.start()
+
     device = torch.device(args.device)
 
     # Store original terminal settings
-    old_settings = termios.tcgetattr(sys.stdin)
+    # old_settings = termios.tcgetattr(sys.stdin)
+    cap = None
     try:
         # Set terminal to raw mode for non-blocking character reading
-        tty.setraw(sys.stdin.fileno())
+        # tty.setraw(sys.stdin.fileno())
 
         # ---------------- Model & processor ----------------
         print("Loading OWL‑ViT model …")
@@ -136,7 +150,7 @@ def main() -> None:
         cap = cv2.VideoCapture(args.camera_id)
         if not cap.isOpened():
             # Restore terminal settings before raising error
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+            # termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
             raise RuntimeError(f"Could not open webcam (index {args.camera_id})")
 
         print("\r                                                                   ", end="") # Clear previous line
@@ -152,34 +166,45 @@ def main() -> None:
         input_buffer = ""
 
         while True:
-            # Check for keyboard input from console (non-blocking)
-            if select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], []):
-                char = sys.stdin.read(1)
-                if char == '\r' or char == '\n': # Enter key pressed
-                    if input_buffer:
-                        new_labels = [label.strip() for label in input_buffer.split(',') if label.strip()]
-                        if new_labels:
-                            args.labels = new_labels
-                            print(f"\rLabels updated to: {', '.join(args.labels)}                        \r") # Overwrite previous prompt/input
-                            # Reset frame count for FPS calculation if needed
-                            frame_count = 0
-                            start_time = time.monotonic()
-                        else:
-                            print("\r⚠️ No valid labels entered.                     \r") # Overwrite
-                        input_buffer = ""
-                    # Reprint prompt after processing or if buffer was empty
-                    print("\nEnter new labels (comma-separated), then press Enter: ", end="", flush=True)
-                elif char == '\x7f' or char == '\b': # Backspace key
-                    if input_buffer:
-                        input_buffer = input_buffer[:-1]
-                        # Use ANSI escape code to move cursor back, print space, move back again
-                        print("\b \b", end="", flush=True)
-                elif char.isprintable():
-                    input_buffer += char
-                    print(char, end="", flush=True) # Echo printable characters
-                elif char == '\x03': # Ctrl+C
-                    print("\rCtrl+C detected, exiting.")
-                    break
+            # Check if there's new label input
+            while not input_queue.empty():
+                user_input = input_queue.get()
+                if user_input.lower() == 'exit':
+                    print("Exiting via input.")
+                    return
+                new_labels = [label.strip() for label in user_input.split(',') if label.strip()]
+                if new_labels:
+                    args.labels = new_labels
+                    print(f"✅ Labels updated: {', '.join(args.labels)}")
+
+            # # Check for keyboard input from console (non-blocking)
+            # if select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], []):
+            #     char = sys.stdin.read(1)
+            #     if char == '\r' or char == '\n': # Enter key pressed
+            #         if input_buffer:
+            #             new_labels = [label.strip() for label in input_buffer.split(',') if label.strip()]
+            #             if new_labels:
+            #                 args.labels = new_labels
+            #                 print(f"\rLabels updated to: {', '.join(args.labels)}                        \r") # Overwrite previous prompt/input
+            #                 # Reset frame count for FPS calculation if needed
+            #                 frame_count = 0
+            #                 start_time = time.monotonic()
+            #             else:
+            #                 print("\r⚠️ No valid labels entered.                     \r") # Overwrite
+            #             input_buffer = ""
+            #         # Reprint prompt after processing or if buffer was empty
+            #         print("\nEnter new labels (comma-separated), then press Enter: ", end="", flush=True)
+            #     elif char == '\x7f' or char == '\b': # Backspace key
+            #         if input_buffer:
+            #             input_buffer = input_buffer[:-1]
+            #             # Use ANSI escape code to move cursor back, print space, move back again
+            #             print("\b \b", end="", flush=True)
+            #     elif char.isprintable():
+            #         input_buffer += char
+            #         print(char, end="", flush=True) # Echo printable characters
+            #     elif char == '\x03': # Ctrl+C
+            #         print("\rCtrl+C detected, exiting.")
+            #         break
 
             ret, frame = cap.read()
             if not ret:
@@ -196,19 +221,22 @@ def main() -> None:
                 start_time = time.monotonic()
 
             # Crop frame to 960x720 (bottom, centered)
-            h, w = frame.shape[:2]
-            target_w, target_h = 960, 720
-            if h < target_h or w < target_w:
-                # Restore terminal settings before raising error or skipping
-                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
-                print(f"\r⚠️ Frame ({w}x{h}) too small for {target_w}x{target_h} crop. Exiting.")
-                # Or optionally, print a warning and continue:
-                # print(f"\r⚠️ Frame ({w}x{h}) too small for {target_w}x{target_h} crop. Skipping frame.", end="", flush=True)
-                # continue
-                break # Exit if frame is too small
-            y_start = h - target_h
-            x_start = (w - target_w) // 2
-            frame = frame[y_start:h, x_start:x_start + target_w]
+            # h, w = frame.shape[:2]
+            # target_w, target_h = 960, 720
+            # if h < target_h or w < target_w:
+            #     # Restore terminal settings before raising error or skipping
+            #     # termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+            #     print(f"\r⚠️ Frame ({w}x{h}) too small for {target_w}x{target_h} crop. Exiting.")
+            #     # Or optionally, print a warning and continue:
+            #     # print(f"\r⚠️ Frame ({w}x{h}) too small for {target_w}x{target_h} crop. Skipping frame.", end="", flush=True)
+            #     # continue
+            #     break # Exit if frame is too small
+            # y_start = h - target_h
+            # x_start = (w - target_w) // 2
+            # frame = frame[y_start:h, x_start:x_start + target_w]
+
+            # Resize to match model input size
+            frame = cv2.resize(frame, (960, 720))
 
             # Convert to PIL (RGB)
             image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
@@ -222,7 +250,7 @@ def main() -> None:
                 threshold=args.threshold,
                 device=device,
             )
-
+            
             # Draw boxes & labels
             boxes = detections["boxes"].cpu()
             scores = detections["scores"].cpu()
@@ -251,7 +279,7 @@ def main() -> None:
 
     finally:
         # Restore terminal settings
-        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+        # termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
         # Clean up
         cap.release()
         cv2.destroyAllWindows()

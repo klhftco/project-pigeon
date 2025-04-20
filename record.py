@@ -17,6 +17,7 @@ def fix_fps(filename, filename_fixed, fps):
 def main(fly=False, record=False):
     tello = Tello()
 
+    duration = 0
     try:
         tello.connect()
         print(tello.get_battery())
@@ -29,9 +30,9 @@ def main(fly=False, record=False):
         height, width, _ = frame.shape
 
         # Use a codec known to work well on Windows
-        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-        out = cv2.VideoWriter('drone_output.avi', fourcc, 30.0, (width, height))
-        time.sleep(1)
+        # fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+        # out = cv2.VideoWriter('drone_output.avi', fourcc, 30.0, (width, height))
+        # time.sleep(1)
 
         frame_count = 0
         start_time = time.time()
@@ -42,7 +43,7 @@ def main(fly=False, record=False):
             img = frame_read.frame
             img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
             img = cv2.resize(img, (width, height))
-            out.write(img)
+            # out.write(img)
             cv2.imshow("Drone View", img)
             cv2.waitKey(10)
             frame_count += 1
@@ -79,12 +80,12 @@ def main(fly=False, record=False):
 
             if keyboard.is_pressed('q'):
                 print("finishing")
+                duration = round(time.time() - start_time, 2)
                 break
     finally:
-        duration = round(time.time() - start_time, 2)
-        print("Recording duration:", duration, "seconds")
+        print("Recording duration:", duration, "seconds", frame_count, "frames")
         cv2.destroyAllWindows()
-        out.release()
+        # out.release()
 
         if fly:
             try:

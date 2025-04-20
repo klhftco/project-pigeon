@@ -5,6 +5,8 @@ import numpy as np
 import time
 import pickle
 
+from owlvit_detector import findBoundingBox
+
 def findFace(img):
     '''
     output:
@@ -86,8 +88,11 @@ def main():
 
     while True:
         img = tello.get_frame_read().frame
-        img, info = findFace(img) # TODO: swap out with YOLO
-        cv2.imshow("Output", img)
+        # img, info = findFace(img) # TODO: swap out with YOLO
+        # cv2.imshow("Output", img)
+
+        frame, info, label = findBoundingBox(img, labels=["a chair"])
+        cv2.imshow("OwlVit Tello View", frame)
 
         # img, mask_preview, info = findShirt(img)
         # mask_preview_bgr = cv2.cvtColor(mask_preview, cv2.COLOR_GRAY2BGR)
