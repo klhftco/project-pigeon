@@ -4,6 +4,7 @@ from collections import deque
 import numpy as np
 import time
 import pickle
+from ultralytics import YOLO
 
 tello = Tello()
 tello.connect()
@@ -14,35 +15,73 @@ tello.takeoff()
 tello.send_rc_control(0, 0, 25, 0)
 time.sleep(3)
 
-def findFace(img):
+# Global variables for person selection
+selected_person = None
+selecting = False
+
+def mouse_callback(event, x, y, flags, param):
+    global selected_person, selecting
+    if event == cv2.EVENT_LBUTTONDOWN:
+        selecting = True
+        # Find the person closest to the click point
+        min_dist = float('inf')
+        for i, (box, center) in enumerate(param['detections']):
+            cx, cy = center
+            dist = np.sqrt((x - cx)**2 + (y - cy)**2)
+            if dist < min_dist:
+                min_dist = dist
+                selected_person = i
+        selecting = False
+
+def findPerson(img, model):
     '''
     output:
         img - image overlay of tracking target
         info[0] - (x, y) coordinate of center of target in frame
         info[1] - area of target in frame
     '''
-    # return the image with bounding box around the face & the center of the face
-    faceCascade = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
-    imgGray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    faces = faceCascade.detectMultiScale(imgGray, 1.2, 8)
-
-    myFaceListC = []
-    myFaceListArea = []
-    for x, y, w, h in faces:
-        # draw bounding box around the face
-        cv2.rectangle(img, (x, y), (x + w, y + h), (0, 0, 255), 2)
-        cx = x + w // 2
-        cy = y + h // 2
-        area = w * h
+    # Run YOLOv8 inference
+    results = model(img, classes=[0])  # 0 is the class ID for 'person'
+    
+    # Get the first result
+    result = results[0]
+    boxes = result.boxes
+    
+    myPersonListC = []
+    myPersonListArea = []
+    detections = []  # Store all detections for selection
+    
+    # Process each detected person
+    for box in boxes:
+        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+        
+        # Calculate center and area
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+        area = (x2 - x1) * (y2 - y1)
+        
+        # Store detection info
+        detections.append((box, [cx, cy]))
+        
+        # Draw bounding box
+        color = (0, 255, 0) if len(detections)-1 == selected_person else (0, 0, 255)
+        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+        
         cv2.circle(img, (cx, cy), 5, (0, 255, 0), cv2.FILLED)
-        myFaceListC.append([cx, cy])
-        myFaceListArea.append(area)
-    if len(myFaceListArea) != 0:
-        # return the face with the largest area
-        i = myFaceListArea.index(max(myFaceListArea))
-        return img, [myFaceListC[i], myFaceListArea[i]]
+        myPersonListC.append([cx, cy])
+        myPersonListArea.append(area)
+    
+    if len(myPersonListArea) != 0:
+        if selected_person is not None and selected_person < len(myPersonListArea):
+            # Return the selected person
+            return img, [myPersonListC[selected_person], myPersonListArea[selected_person]], detections
+        else:
+            # Return the person with the largest area
+            i = myPersonListArea.index(max(myPersonListArea))
+            return img, [myPersonListC[i], myPersonListArea[i]], detections
     else:
-        return img, [[0, 0], 0]
+        return img, [[0, 0], 0], []
 
 def trackFace(info, pid, px_error, py_error, fbRange=[14000, 15000]):
     (x, y), area = info
@@ -106,14 +145,29 @@ def main():
     y_error_queue = deque(maxlen=100)
     face_coord_queue = deque(maxlen=20)
 
+    # Load YOLOv8 model
+    print("Loading YOLOv8 model...")
+    model = YOLO('yolov8n.pt')
+    print("Model loaded successfully!")
+
+    # Create window and set mouse callback
+    cv2.namedWindow("Output")
+    cv2.setMouseCallback("Output", mouse_callback, {'detections': []})
+
     # pid parameters
     pid = [0.2, 0.04, 0.005]
     px_error = 0
     py_error = 0
 
+    print("Click on a person to select them for tracking. Press 'q' to quit.")
+
     while True:
         img = tello.get_frame_read().frame
-        img, info = findFace(img) # TODO: swap out with YOLO
+        img, info, detections = findPerson(img, model)
+        
+        # Update detections for mouse callback
+        cv2.setMouseCallback("Output", mouse_callback, {'detections': detections})
+        
         px_error, py_error = trackFace(info, pid, px_error, py_error)
         cv2.imshow("Output", img)
 
