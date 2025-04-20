@@ -5,11 +5,13 @@ import numpy as np
 import time
 import pickle
 
-from owlvit_detector import findBoundingBox
+# from owlvit_detector import findBoundingBox
+from yolo_detector import findBoundingBox
+
 
 tello = Tello()
 tello.connect()
-print(tello.get_battery())
+print(f"Battery: {tello.get_battery()}")
 
 tello.streamon()
 time.sleep(1)
@@ -132,7 +134,7 @@ def main():
     while True:
         img = tello.get_frame_read().frame
         # img, info, obj = findShirt(img) # TODO: swap out with YOLO
-        img = cv2.resize(img, (480, 360))
+        # img = cv2.resize(img, (480, 360))
         print(target_coord_queue)
         img, info, obj = findBoundingBox(img, labels=["a chair"])
         obj = "chair"
