@@ -1,10 +1,11 @@
 import torch
 from ultralytics import YOLO
+import os
 
 class YoloDetector:
     """Handles loading the YOLO model and performing object detections."""
 
-    def __init__(self, model_path="yolov8s.pt", device=None):
+    def __init__(self, model_path="yolov8n.pt", device=None):
         """
         Initializes the YOLO detector.
 
@@ -27,7 +28,11 @@ class YoloDetector:
             self.device = device
             print(f"ℹ️ YoloDetector: Using specified device: {self.device}")
 
-        self.model = YOLO(model_path)
+        # Use absolute path to the model file
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        abs_model_path = os.path.join(current_dir, model_path)
+        print(f"📁 Loading model from: {abs_model_path}")
+        self.model = YOLO(abs_model_path)
         print(f"✅ YoloDetector: Model '{model_path}' loaded successfully.")
 
         # Get the class ID for 'person'
