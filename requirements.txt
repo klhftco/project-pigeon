@@ -9,3 +9,4 @@ djitellopy==2.5.0
 transformers
 torch
 pillow
+ultralytics
