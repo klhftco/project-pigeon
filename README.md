@@ -1,6 +1,6 @@
 # Project Pigeon
 
-Natural language drone control — chat or voice interface for scanning, targeting, and following people. Built in 24 hours using YOLOv8 + OWL-ViT for open-vocab object tracking.
+Natural language drone control - chat or voice interface for scanning, targeting, and following people. Built in 24 hours using YOLOv8 + OWL-ViT for open-vocab object tracking.
 
 <img src="media/demo.gif" width="280"/>
 
