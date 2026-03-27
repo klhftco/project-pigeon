@@ -1,6 +1,6 @@
 # Project Pigeon
 
-An autonomous DJI Tello drone that locates and tracks people on natural language command. Built in 24 hours.
+Natural language drone control — chat or voice interface for scanning, targeting, and following people. Built in 24 hours using YOLOv8 + OWL-ViT for open-vocab object tracking.
 
 <img src="media/demo.gif" width="280"/>
 
