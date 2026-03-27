@@ -61,3 +61,7 @@ uv run python -m drone_tracker.drone_controller_owl  # OWL-ViT
 - `OpenCV` - face detection + video I/O
 - `Flask` - web interface
 - `OpenAI API` - natural language command parsing
+
+---
+
+Built by Noah Bucher, Tim Cramer, Leo Huang, Alex Wang, and Haden Wasserbaech
